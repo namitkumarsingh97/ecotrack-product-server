@@ -26,6 +26,46 @@ const verifyCompanyOwnership = async (req: AuthRequest, res: Response, next: Fun
   }
 };
 
+// GET Available Periods
+router.get('/periods', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const currentYear = new Date().getFullYear();
+    const currentQuarter = Math.ceil((new Date().getMonth() + 1) / 3);
+    
+    // Generate periods: last 2 years + current year + next 2 years (all quarters)
+    const periods: string[] = [];
+    
+    // Last 2 years
+    for (let year = currentYear - 2; year < currentYear; year++) {
+      for (let quarter = 1; quarter <= 4; quarter++) {
+        periods.push(`${year}-Q${quarter}`);
+      }
+    }
+    
+    // Current year (up to current quarter)
+    for (let quarter = 1; quarter <= currentQuarter; quarter++) {
+      periods.push(`${currentYear}-Q${quarter}`);
+    }
+    
+    // Next 2 years (all quarters)
+    for (let year = currentYear + 1; year <= currentYear + 2; year++) {
+      for (let quarter = 1; quarter <= 4; quarter++) {
+        periods.push(`${year}-Q${quarter}`);
+      }
+    }
+    
+    // Also add annual periods (optional - if needed)
+    // for (let year = currentYear - 2; year <= currentYear + 2; year++) {
+    //   periods.push(`${year}-Annual`);
+    // }
+    
+    res.json({ periods });
+  } catch (error) {
+    console.error('Get periods error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // POST Environmental Metrics
 router.post(
   '/environment',
@@ -440,6 +480,117 @@ router.delete('/governance/:id', authenticate, async (req: AuthRequest, res: Res
   } catch (error) {
     console.error('Delete governance metrics error:', error);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET Data Collection Hub Status
+router.get('/collection-hub/:companyId', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const { companyId } = req.params;
+
+    // Verify company ownership
+    const company = await Company.findOne({
+      _id: companyId,
+      userId: req.userId
+    });
+
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found or unauthorized' });
+    }
+
+    // Get all metrics for the company
+    const [environmental, social, governance] = await Promise.all([
+      EnvironmentalMetrics.find({ companyId }).sort({ period: -1 }),
+      SocialMetrics.find({ companyId }).sort({ period: -1 }),
+      GovernanceMetrics.find({ companyId }).sort({ period: -1 })
+    ]);
+
+    // Get all unique periods
+    const allPeriods = Array.from(new Set([
+      ...environmental.map(m => m.period),
+      ...social.map(m => m.period),
+      ...governance.map(m => m.period)
+    ])).sort().reverse();
+
+    // Calculate collection status for each period
+    const collectionStatus = allPeriods.map(period => {
+      const envMetric = environmental.find(m => m.period === period);
+      const socialMetric = social.find(m => m.period === period);
+      const govMetric = governance.find(m => m.period === period);
+
+      const modulesCompleted = [
+        envMetric ? 'environment' : null,
+        socialMetric ? 'social' : null,
+        govMetric ? 'governance' : null
+      ].filter(Boolean);
+
+      const completionPercentage = (modulesCompleted.length / 3) * 100;
+      const isComplete = modulesCompleted.length === 3;
+
+      return {
+        period,
+        isComplete,
+        completionPercentage: Math.round(completionPercentage),
+        modules: {
+          environment: {
+            exists: !!envMetric,
+            metricId: envMetric?._id,
+            lastUpdated: envMetric?.updatedAt || envMetric?.createdAt
+          },
+          social: {
+            exists: !!socialMetric,
+            metricId: socialMetric?._id,
+            lastUpdated: socialMetric?.updatedAt || socialMetric?.createdAt
+          },
+          governance: {
+            exists: !!govMetric,
+            metricId: govMetric?._id,
+            lastUpdated: govMetric?.updatedAt || govMetric?.createdAt
+          }
+        },
+        lastUpdated: [
+          envMetric?.updatedAt || envMetric?.createdAt,
+          socialMetric?.updatedAt || socialMetric?.createdAt,
+          govMetric?.updatedAt || govMetric?.createdAt
+        ].filter(Boolean).sort().reverse()[0] || null
+      };
+    });
+
+    // Calculate overall statistics
+    const totalPeriods = allPeriods.length;
+    const completePeriods = collectionStatus.filter(s => s.isComplete).length;
+    const incompletePeriods = totalPeriods - completePeriods;
+    const overallCompletion = totalPeriods > 0 ? Math.round((completePeriods / totalPeriods) * 100) : 0;
+
+    // Module-wise statistics
+    const envCount = environmental.length;
+    const socialCount = social.length;
+    const govCount = governance.length;
+    const totalMetrics = envCount + socialCount + govCount;
+
+    res.json({
+      company: {
+        name: company.name,
+        industry: company.industry
+      },
+      statistics: {
+        totalPeriods,
+        completePeriods,
+        incompletePeriods,
+        overallCompletion,
+        totalMetrics,
+        moduleCounts: {
+          environment: envCount,
+          social: socialCount,
+          governance: govCount
+        }
+      },
+      collectionStatus,
+      periods: allPeriods
+    });
+  } catch (error: any) {
+    console.error('Get data collection hub error:', error);
+    res.status(500).json({ error: error.message || 'Server error' });
   }
 });
 
