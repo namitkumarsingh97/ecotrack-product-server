@@ -11,6 +11,9 @@ import companyRoutes from './routes/company';
 import metricsRoutes from './routes/metrics';
 import esgRoutes from './routes/esg';
 import featuresRoutes from './routes/features';
+import evidenceRoutes from './routes/evidence';
+import complianceRoutes from './routes/compliance';
+import tasksRoutes from './routes/tasks';
 
 // Load environment variables
 dotenv.config();
@@ -41,6 +44,9 @@ app.use('/api/company', companyRoutes);
 app.use('/api/metrics', metricsRoutes);
 app.use('/api/esg', esgRoutes);
 app.use('/api/features', featuresRoutes);
+app.use('/api/evidence', evidenceRoutes);
+app.use('/api/compliance', complianceRoutes);
+app.use('/api/tasks', tasksRoutes);
 
 // Error handling middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
