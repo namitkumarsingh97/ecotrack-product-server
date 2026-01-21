@@ -2,9 +2,20 @@ import express, { Response } from 'express';
 import { body, validationResult } from 'express-validator';
 import ESGScore from '../models/ESGScore';
 import Company from '../models/Company';
+import EnvironmentalMetrics from '../models/EnvironmentalMetrics';
+import SocialMetrics from '../models/SocialMetrics';
+import GovernanceMetrics from '../models/GovernanceMetrics';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { calculateESGScore } from '../services/esgScoring';
 import { generatePDFReport, generateExcelReport } from '../services/reportGenerator';
+import {
+  getRiskLevel,
+  getEnvironmentalCompleteness,
+  getSocialCompleteness,
+  getGovernanceCompleteness,
+  getOverallCompleteness,
+  getImpactExplanation
+} from '../services/dataCompleteness';
 
 const router = express.Router();
 
@@ -106,47 +117,30 @@ router.get('/scorecard/:companyId', authenticate, async (req: AuthRequest, res: 
       return res.status(404).json({ error: 'Company not found or unauthorized' });
     }
 
-    // Get all scores for trends
-    const allScores = await ESGScore.find({ companyId }).sort({ period: -1 }).limit(12);
-    
-    // Get latest score or specific period
-    const latestScore = period 
-      ? await ESGScore.findOne({ companyId, period }).sort({ calculatedAt: -1 })
-      : allScores[0];
+    // Get all periods that have metrics (real-time data)
+    const [envMetrics, socialMetrics, govMetrics] = await Promise.all([
+      EnvironmentalMetrics.find({ companyId }).sort({ period: -1 }),
+      SocialMetrics.find({ companyId }).sort({ period: -1 }),
+      GovernanceMetrics.find({ companyId }).sort({ period: -1 })
+    ]);
 
-    if (!latestScore && allScores.length === 0) {
+    // Get unique periods from all metrics
+    const allPeriods = Array.from(new Set([
+      ...envMetrics.map(m => m.period),
+      ...socialMetrics.map(m => m.period),
+      ...govMetrics.map(m => m.period)
+    ])).sort().reverse();
+
+    if (allPeriods.length === 0) {
       return res.json({
         scorecard: null,
         trends: [],
         periods: [],
-        message: 'No ESG scores calculated yet'
+        message: 'No ESG metrics found. Please add metrics to calculate scores.'
       });
     }
 
-    // Calculate trends (last 6 periods, reversed for chronological order)
-    const trendScores = allScores.slice(0, 6).reverse();
-    const trends = trendScores.map((score, index) => {
-      const previousScore = index > 0 ? trendScores[index - 1] : null;
-      return {
-        period: score.period,
-        overallScore: score.overallScore,
-        environmentalScore: score.environmentalScore,
-        socialScore: score.socialScore,
-        governanceScore: score.governanceScore,
-        calculatedAt: score.calculatedAt || score.createdAt,
-        change: previousScore ? {
-          overall: score.overallScore - previousScore.overallScore,
-          environmental: score.environmentalScore - previousScore.environmentalScore,
-          social: score.socialScore - previousScore.socialScore,
-          governance: score.governanceScore - previousScore.governanceScore,
-        } : null
-      };
-    });
-
-    // Get unique periods
-    const periods = Array.from(new Set(allScores.map(s => s.period))).sort().reverse();
-
-    // Calculate score grade
+    // Calculate score grade helper
     const getScoreGrade = (score: number): { grade: string; color: string; label: string } => {
       if (score >= 90) return { grade: 'A+', color: '#10b981', label: 'Excellent' };
       if (score >= 80) return { grade: 'A', color: '#22c55e', label: 'Very Good' };
@@ -156,32 +150,141 @@ router.get('/scorecard/:companyId', authenticate, async (req: AuthRequest, res: 
       return { grade: 'F', color: '#ef4444', label: 'Poor' };
     };
 
-    const scorecard = latestScore ? {
-      period: latestScore.period,
-      overallScore: latestScore.overallScore,
-      overallGrade: getScoreGrade(latestScore.overallScore),
-      environmentalScore: latestScore.environmentalScore,
-      environmentalGrade: getScoreGrade(latestScore.environmentalScore),
-      socialScore: latestScore.socialScore,
-      socialGrade: getScoreGrade(latestScore.socialScore),
-      governanceScore: latestScore.governanceScore,
-      governanceGrade: getScoreGrade(latestScore.governanceScore),
-      calculatedAt: latestScore.calculatedAt || latestScore.createdAt,
-      // Compare with previous period
-      previousPeriod: allScores.length > 1 ? {
-        period: allScores[1]?.period,
-        overallScore: allScores[1]?.overallScore,
-        change: latestScore.overallScore - (allScores[1]?.overallScore || 0),
-        environmentalChange: latestScore.environmentalScore - (allScores[1]?.environmentalScore || 0),
-        socialChange: latestScore.socialScore - (allScores[1]?.socialScore || 0),
-        governanceChange: latestScore.governanceScore - (allScores[1]?.governanceScore || 0),
+    // Calculate scores for all periods (real-time)
+    const calculatedScores: Array<{
+      period: string;
+      overallScore: number;
+      environmentalScore: number;
+      socialScore: number;
+      governanceScore: number;
+      calculatedAt: Date;
+    }> = [];
+
+    for (const p of allPeriods.slice(0, 12)) { // Limit to last 12 periods for performance
+      try {
+        const scores = await calculateESGScore(companyId, p);
+        calculatedScores.push({
+          period: p,
+          overallScore: scores.overallScore,
+          environmentalScore: scores.environmentalScore,
+          socialScore: scores.socialScore,
+          governanceScore: scores.governanceScore,
+          calculatedAt: new Date()
+        });
+      } catch (error) {
+        // Skip periods with incomplete data
+        console.warn(`Skipping period ${p} due to incomplete metrics`);
+      }
+    }
+
+    if (calculatedScores.length === 0) {
+      return res.json({
+        scorecard: null,
+        trends: [],
+        periods: allPeriods,
+        message: 'No complete ESG metrics found. Please ensure all metrics (Environmental, Social, Governance) are filled for at least one period.'
+      });
+    }
+
+    // Determine which period to show
+    const targetPeriod = period || calculatedScores[0].period;
+    const currentScore = calculatedScores.find(s => s.period === targetPeriod) || calculatedScores[0];
+    
+    // Find previous period (chronologically earlier - array is sorted newest first)
+    const currentIndex = calculatedScores.findIndex(s => s.period === currentScore.period);
+    const previousScore = currentIndex >= 0 && currentIndex < calculatedScores.length - 1 
+      ? calculatedScores[currentIndex + 1] 
+      : null;
+
+    // Get metrics for the target period to calculate completeness
+    const [envMetric, socialMetric, govMetric] = await Promise.all([
+      EnvironmentalMetrics.findOne({ companyId, period: targetPeriod }).sort({ createdAt: -1 }),
+      SocialMetrics.findOne({ companyId, period: targetPeriod }).sort({ createdAt: -1 }),
+      GovernanceMetrics.findOne({ companyId, period: targetPeriod }).sort({ createdAt: -1 })
+    ]);
+
+    // Calculate data completeness
+    const envCompleteness = envMetric ? getEnvironmentalCompleteness(envMetric.toObject()) : { completeness: 0, completed: [], missing: [], missingCritical: [] };
+    const socialCompleteness = socialMetric ? getSocialCompleteness(socialMetric.toObject()) : { completeness: 0, completed: [], missing: [], missingCritical: [] };
+    const govCompleteness = govMetric ? getGovernanceCompleteness(govMetric.toObject()) : { completeness: 0, completed: [], missing: [], missingCritical: [] };
+    const overallCompleteness = getOverallCompleteness(envCompleteness.completeness, socialCompleteness.completeness, govCompleteness.completeness);
+
+    // Calculate risk levels
+    const overallRisk = getRiskLevel(currentScore.overallScore);
+    const envRisk = getRiskLevel(currentScore.environmentalScore);
+    const socialRisk = getRiskLevel(currentScore.socialScore);
+    const govRisk = getRiskLevel(currentScore.governanceScore);
+
+    // Build scorecard
+    const scorecard = {
+      period: currentScore.period,
+      overallScore: currentScore.overallScore,
+      overallGrade: getScoreGrade(currentScore.overallScore),
+      overallRisk: overallRisk.level,
+      overallRiskColor: overallRisk.color,
+      dataCompleteness: overallCompleteness,
+      environmentalScore: currentScore.environmentalScore,
+      environmentalGrade: getScoreGrade(currentScore.environmentalScore),
+      environmentalRisk: envRisk.level,
+      environmentalRiskColor: envRisk.color,
+      environmentalCompleteness: envCompleteness.completeness,
+      environmentalCompleted: envCompleteness.completed,
+      environmentalMissing: envCompleteness.missing,
+      environmentalMissingCritical: envCompleteness.missingCritical,
+      environmentalImpact: getImpactExplanation('Environmental', currentScore.environmentalScore, envCompleteness.missingCritical),
+      socialScore: currentScore.socialScore,
+      socialGrade: getScoreGrade(currentScore.socialScore),
+      socialRisk: socialRisk.level,
+      socialRiskColor: socialRisk.color,
+      socialCompleteness: socialCompleteness.completeness,
+      socialCompleted: socialCompleteness.completed,
+      socialMissing: socialCompleteness.missing,
+      socialMissingCritical: socialCompleteness.missingCritical,
+      socialImpact: getImpactExplanation('Social', currentScore.socialScore, socialCompleteness.missingCritical),
+      governanceScore: currentScore.governanceScore,
+      governanceGrade: getScoreGrade(currentScore.governanceScore),
+      governanceRisk: govRisk.level,
+      governanceRiskColor: govRisk.color,
+      governanceCompleteness: govCompleteness.completeness,
+      governanceCompleted: govCompleteness.completed,
+      governanceMissing: govCompleteness.missing,
+      governanceMissingCritical: govCompleteness.missingCritical,
+      governanceImpact: getImpactExplanation('Governance', currentScore.governanceScore, govCompleteness.missingCritical),
+      calculatedAt: currentScore.calculatedAt.toISOString(),
+      previousPeriod: previousScore ? {
+        period: previousScore.period,
+        overallScore: previousScore.overallScore,
+        change: currentScore.overallScore - previousScore.overallScore,
+        environmentalChange: currentScore.environmentalScore - previousScore.environmentalScore,
+        socialChange: currentScore.socialScore - previousScore.socialScore,
+        governanceChange: currentScore.governanceScore - previousScore.governanceScore,
       } : null
-    } : null;
+    };
+
+    // Build trends (last 6 periods, reversed for chronological order)
+    const trendScores = calculatedScores.slice(0, 6).reverse();
+    const trends = trendScores.map((score, index) => {
+      const previousTrendScore = index > 0 ? trendScores[index - 1] : null;
+      return {
+        period: score.period,
+        overallScore: score.overallScore,
+        environmentalScore: score.environmentalScore,
+        socialScore: score.socialScore,
+        governanceScore: score.governanceScore,
+        calculatedAt: score.calculatedAt.toISOString(),
+        change: previousTrendScore ? {
+          overall: score.overallScore - previousTrendScore.overallScore,
+          environmental: score.environmentalScore - previousTrendScore.environmentalScore,
+          social: score.socialScore - previousTrendScore.socialScore,
+          governance: score.governanceScore - previousTrendScore.governanceScore,
+        } : null
+      };
+    });
 
     res.json({
       scorecard,
       trends,
-      periods,
+      periods: allPeriods,
       company: {
         name: company.name,
         industry: company.industry

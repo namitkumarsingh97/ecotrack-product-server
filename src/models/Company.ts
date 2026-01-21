@@ -3,10 +3,14 @@ import mongoose, { Schema, Document } from 'mongoose';
 export interface ICompany extends Document {
   userId: mongoose.Types.ObjectId;
   name: string;
+  legalName?: string; // Legal name of the company
+  cin?: string; // Corporate Identification Number
+  gst?: string; // GST Number
   industry: string;
   employeeCount: number;
   annualRevenue: number;
   location: string;
+  locations?: string[]; // Multiple locations
   reportingYear: number;
   customFeatures?: string[]; // Array of custom feature IDs enabled for this company
   featureOverrides?: Record<string, boolean>; // Override specific features
@@ -23,6 +27,18 @@ const CompanySchema: Schema = new Schema({
   name: {
     type: String,
     required: true,
+    trim: true
+  },
+  legalName: {
+    type: String,
+    trim: true
+  },
+  cin: {
+    type: String,
+    trim: true
+  },
+  gst: {
+    type: String,
     trim: true
   },
   industry: {
@@ -43,6 +59,10 @@ const CompanySchema: Schema = new Schema({
   location: {
     type: String,
     required: true
+  },
+  locations: {
+    type: [String],
+    default: []
   },
   reportingYear: {
     type: Number,
