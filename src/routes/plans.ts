@@ -2,6 +2,7 @@ import express, { Response } from 'express';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { getAllPlans, getPlanByType } from '../services/planService';
 import User from '../models/User';
+import Company from '../models/Company';
 
 const router = express.Router();
 
@@ -16,7 +17,7 @@ router.get('/', authenticate, async (req: AuthRequest, res: Response) => {
   }
 });
 
-// Get current user's plan
+// Get current company's plan
 router.get('/current', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const user = await User.findById(req.userId);
@@ -24,9 +25,15 @@ router.get('/current', authenticate, async (req: AuthRequest, res: Response) => 
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const plan = await getPlanByType(user.plan);
+    // Get company plan (plan is now company-specific)
+    const company = await Company.findOne({ userId: req.userId });
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+
+    const plan = await getPlanByType(company.plan || 'starter');
     res.json({ 
-      plan: user.plan,
+      plan: company.plan || 'starter',
       planDetails: plan
     });
   } catch (error: any) {
@@ -35,13 +42,13 @@ router.get('/current', authenticate, async (req: AuthRequest, res: Response) => 
   }
 });
 
-// Update user's plan (for admin or self)
+// Update company's plan (for admin testing or actual subscription)
 router.put(
   '/update',
   authenticate,
   async (req: AuthRequest, res: Response) => {
     try {
-      const { plan } = req.body;
+      const { plan, companyId } = req.body;
 
       if (!['starter', 'pro', 'enterprise'].includes(plan)) {
         return res.status(400).json({ error: 'Invalid plan type' });
@@ -52,15 +59,29 @@ router.put(
         return res.status(404).json({ error: 'User not found' });
       }
 
+      // Get company - use companyId if provided (for admin), otherwise user's company
+      let company;
+      if (companyId && user.role === 'ADMIN') {
+        // Admin can update any company's plan
+        company = await Company.findById(companyId);
+      } else {
+        // Regular users update their own company's plan
+        company = await Company.findOne({ userId: req.userId });
+      }
+
+      if (!company) {
+        return res.status(404).json({ error: 'Company not found' });
+      }
+
       // In production, you'd want to verify payment/subscription here
-      user.plan = plan;
-      await user.save();
+      company.plan = plan;
+      await company.save();
 
       const planDetails = await getPlanByType(plan);
 
       res.json({
-        message: 'Plan updated successfully',
-        plan: user.plan,
+        message: 'Company plan updated successfully',
+        plan: company.plan,
         planDetails
       });
     } catch (error: any) {

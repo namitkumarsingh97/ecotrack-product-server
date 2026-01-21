@@ -82,7 +82,8 @@ router.put(
     body('employeeCount').optional().isInt({ min: 10, max: 500 }).withMessage('Employee count must be between 10 and 500'),
     body('annualRevenue').optional().isNumeric().withMessage('Annual revenue must be a number'),
     body('location').optional().trim().notEmpty().withMessage('Location cannot be empty'),
-    body('reportingYear').optional().isInt({ min: 2020, max: 2030 }).withMessage('Reporting year must be between 2020 and 2030')
+    body('reportingYear').optional().isInt({ min: 2020, max: 2030 }).withMessage('Reporting year must be between 2020 and 2030'),
+    body('plan').optional().isIn(['starter', 'pro', 'enterprise']).withMessage('Plan must be starter, pro, or enterprise')
   ],
   async (req: AuthRequest, res: Response) => {
     try {

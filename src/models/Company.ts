@@ -12,6 +12,12 @@ export interface ICompany extends Document {
   location: string;
   locations?: string[]; // Multiple locations
   reportingYear: number;
+  plan: 'starter' | 'pro' | 'enterprise'; // Subscription plan for this company (client)
+  subscriptionStatus: 'trial' | 'active' | 'expired' | 'cancelled'; // Subscription status
+  isTrial: boolean; // Whether company is on trial
+  trialStartDate?: Date; // When trial started
+  trialEndDate?: Date; // When trial ends
+  subscriptionStartDate?: Date; // When paid subscription started
   customFeatures?: string[]; // Array of custom feature IDs enabled for this company
   featureOverrides?: Record<string, boolean>; // Override specific features
   createdAt: Date;
@@ -69,6 +75,33 @@ const CompanySchema: Schema = new Schema({
     required: true,
     min: 2020,
     max: 2030
+  },
+  plan: {
+    type: String,
+    enum: ['starter', 'pro', 'enterprise'],
+    default: 'starter',
+    required: true
+  },
+  subscriptionStatus: {
+    type: String,
+    enum: ['trial', 'active', 'expired', 'cancelled'],
+    default: 'active'
+  },
+  isTrial: {
+    type: Boolean,
+    default: false
+  },
+  trialStartDate: {
+    type: Date,
+    default: null
+  },
+  trialEndDate: {
+    type: Date,
+    default: null
+  },
+  subscriptionStartDate: {
+    type: Date,
+    default: null
   },
   customFeatures: {
     type: [String],

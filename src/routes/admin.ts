@@ -7,6 +7,7 @@ import Company from '../models/Company';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { requireAdmin } from '../middleware/requireAdmin';
 import { emailService } from '../services/emailService';
+import { canAddUser } from '../services/userLimitService';
 
 const router = express.Router();
 
@@ -23,6 +24,7 @@ router.post(
   [
     body('email').isEmail().normalizeEmail(),
     body('name').trim().notEmpty(),
+    body('companyId').optional().isMongoId().withMessage('Invalid company ID'),
     body('plan').optional().isIn(['starter', 'pro', 'enterprise']),
     body('role').optional().isIn(['USER', 'ADMIN', 'AUDITOR']),
     body('sendInvitation').optional().isBoolean()
@@ -34,12 +36,24 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { email, name, plan = 'starter', role = 'USER', sendInvitation = true } = req.body;
+      const { email, name, companyId, plan = 'starter', role = 'USER', sendInvitation = true } = req.body;
 
       // Check if user exists
       const existingUser = await User.findOne({ email });
       if (existingUser) {
         return res.status(400).json({ error: 'User with this email already exists' });
+      }
+
+      // If companyId is provided, check user limit
+      if (companyId) {
+        const limitCheck = await canAddUser(companyId);
+        if (!limitCheck.canAdd) {
+          return res.status(403).json({
+            error: limitCheck.message || 'User limit reached for this company',
+            currentCount: limitCheck.currentCount,
+            maxUsers: limitCheck.maxUsers
+          });
+        }
       }
 
       // Generate temporary password
@@ -51,6 +65,7 @@ router.post(
         email,
         password: hashedPassword,
         name,
+        companyId: companyId || null,
         plan,
         role
       });
@@ -331,9 +346,7 @@ router.post(
         role: 'USER' // New clients are always regular users
       });
 
-      await user.save();
-
-      // Create company linked to the user
+      // Create company (client) first
       const company = new Company({
         userId: user._id,
         name: companyName,
@@ -341,10 +354,31 @@ router.post(
         employeeCount: parseInt(employeeCount),
         annualRevenue: parseFloat(annualRevenue),
         location,
-        reportingYear: parseInt(reportingYear)
+        reportingYear: parseInt(reportingYear),
+        plan: plan || 'starter' // Plan is company-specific
       });
 
+      // Set subscription status based on plan
+      if (plan === 'pro') {
+        // Pro plan gets 14-day trial
+        company.subscriptionStatus = 'trial';
+        company.isTrial = true;
+        const now = new Date();
+        company.trialStartDate = now;
+        const trialEndDate = new Date(now);
+        trialEndDate.setDate(trialEndDate.getDate() + 14); // 14 days
+        company.trialEndDate = trialEndDate;
+      } else {
+        // Starter and Enterprise start as active (no trial)
+        company.subscriptionStatus = 'active';
+        company.isTrial = false;
+      }
+
       await company.save();
+
+      // Link user to company
+      user.companyId = company._id;
+      await user.save();
 
       // Send invitation email if requested
       if (sendInvitation) {

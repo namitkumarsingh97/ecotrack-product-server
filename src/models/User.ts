@@ -4,7 +4,8 @@ export interface IUser extends Document {
   email: string;
   password: string;
   name: string;
-  plan: 'starter' | 'pro' | 'enterprise';
+  companyId?: mongoose.Types.ObjectId; // Company (client) this user belongs to
+  plan?: 'starter' | 'pro' | 'enterprise'; // Deprecated: Plan is now on Company. Kept for backward compatibility
   role: 'ADMIN' | 'USER' | 'AUDITOR';
   resetToken?: string;
   resetTokenExpiry?: Date;
@@ -29,10 +30,16 @@ const UserSchema: Schema = new Schema({
     required: true,
     trim: true
   },
+  companyId: {
+    type: Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null
+  },
   plan: {
     type: String,
     enum: ['starter', 'pro', 'enterprise'],
-    default: 'starter'
+    default: null,
+    required: false // Deprecated: Plan is now on Company
   },
   role: {
     type: String,
@@ -50,6 +57,9 @@ const UserSchema: Schema = new Schema({
 }, {
   timestamps: true
 });
+
+// Index for faster queries by company
+UserSchema.index({ companyId: 1 });
 
 export default mongoose.model<IUser>('User', UserSchema);
 

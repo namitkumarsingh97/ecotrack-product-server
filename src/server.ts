@@ -15,6 +15,7 @@ import evidenceRoutes from './routes/evidence';
 import complianceRoutes from './routes/compliance';
 import tasksRoutes from './routes/tasks';
 import plansRoutes from './routes/plans';
+import trialsRoutes from './routes/trials';
 
 // Load environment variables
 dotenv.config();
@@ -49,6 +50,7 @@ app.use('/api/evidence', evidenceRoutes);
 app.use('/api/compliance', complianceRoutes);
 app.use('/api/tasks', tasksRoutes);
 app.use('/api/plans', plansRoutes);
+app.use('/api/trials', trialsRoutes);
 
 // Error handling middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
