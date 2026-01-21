@@ -44,8 +44,9 @@ router.post(
         return res.status(400).json({ error: 'User with this email already exists' });
       }
 
-      // If companyId is provided, check user limit
-      if (companyId) {
+      // If companyId is provided and user is not ADMIN, check user limit
+      // Admins are system-level users and don't count towards company user limits
+      if (companyId && role !== 'ADMIN') {
         const limitCheck = await canAddUser(companyId);
         if (!limitCheck.canAdd) {
           return res.status(403).json({
@@ -56,6 +57,9 @@ router.post(
         }
       }
 
+      // Admins should not have a companyId (they're system-level)
+      const finalCompanyId = role === 'ADMIN' ? null : (companyId || null);
+
       // Generate temporary password
       const tempPassword = crypto.randomBytes(12).toString('base64').slice(0, 12);
       const hashedPassword = await bcrypt.hash(tempPassword, 10);
@@ -65,7 +69,7 @@ router.post(
         email,
         password: hashedPassword,
         name,
-        companyId: companyId || null,
+        companyId: finalCompanyId,
         plan,
         role
       });
@@ -107,13 +111,15 @@ router.post(
  */
 router.get('/users', async (req: Request, res: Response) => {
   try {
-    const users = await User.find().select('-password -resetToken -resetTokenExpiry').sort({ createdAt: -1 });
+    const users = await User.find().select('-password -resetToken -resetTokenExpiry').populate('companyId', 'name').sort({ createdAt: -1 });
     
     res.json({
       users: users.map(user => ({
         id: user._id,
         email: user.email,
         name: user.name,
+        companyId: user.companyId ? (typeof user.companyId === 'object' ? user.companyId._id.toString() : user.companyId.toString()) : null,
+        companyName: user.companyId && typeof user.companyId === 'object' ? user.companyId.name : null,
         plan: user.plan,
         role: user.role,
         createdAt: user.createdAt,
