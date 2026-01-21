@@ -42,6 +42,17 @@ router.post(
   }
 );
 
+// Get all companies for user (must come before /:id route)
+router.get('/', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const companies = await Company.find({ userId: req.userId });
+    res.json({ companies });
+  } catch (error) {
+    console.error('Get companies error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Get company by ID
 router.get('/:id', authenticate, async (req: AuthRequest, res: Response) => {
   try {
@@ -61,40 +72,52 @@ router.get('/:id', authenticate, async (req: AuthRequest, res: Response) => {
   }
 });
 
-// Get all companies for user
-router.get('/', authenticate, async (req: AuthRequest, res: Response) => {
-  try {
-    const companies = await Company.find({ userId: req.userId });
-    res.json({ companies });
-  } catch (error) {
-    console.error('Get companies error:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
 // Update company
 router.put(
   '/:id',
   authenticate,
   [
-    body('name').optional().trim().notEmpty(),
-    body('industry').optional().notEmpty(),
-    body('employeeCount').optional().isInt({ min: 10, max: 500 }),
-    body('annualRevenue').optional().isNumeric(),
-    body('location').optional().trim().notEmpty(),
-    body('reportingYear').optional().isInt({ min: 2020, max: 2030 })
+    body('name').optional().trim().notEmpty().withMessage('Name cannot be empty'),
+    body('industry').optional().notEmpty().withMessage('Industry cannot be empty'),
+    body('employeeCount').optional().isInt({ min: 10, max: 500 }).withMessage('Employee count must be between 10 and 500'),
+    body('annualRevenue').optional().isNumeric().withMessage('Annual revenue must be a number'),
+    body('location').optional().trim().notEmpty().withMessage('Location cannot be empty'),
+    body('reportingYear').optional().isInt({ min: 2020, max: 2030 }).withMessage('Reporting year must be between 2020 and 2030')
   ],
   async (req: AuthRequest, res: Response) => {
     try {
+      const { id } = req.params;
+      const userId = req.userId;
+
+      console.log('PUT /company/:id - Request received:', { id, userId, body: req.body });
+
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
+        console.log('Validation errors:', errors.array());
         return res.status(400).json({ errors: errors.array() });
       }
 
+      // Validate MongoDB ObjectId format
+      if (!id || id.length !== 24) {
+        console.log('Invalid ID format:', id);
+        return res.status(400).json({ error: 'Invalid company ID format' });
+      }
+
+      // Check if company exists and belongs to user
+      const existingCompany = await Company.findOne({
+        _id: id,
+        userId: userId
+      });
+
+      if (!existingCompany) {
+        return res.status(404).json({ error: 'Company not found or you do not have permission to update it' });
+      }
+
+      // Update company
       const company = await Company.findOneAndUpdate(
-        { _id: req.params.id, userId: req.userId },
+        { _id: id, userId: userId },
         req.body,
-        { new: true }
+        { new: true, runValidators: true }
       );
 
       if (!company) {
@@ -105,8 +128,19 @@ router.put(
         message: 'Company updated successfully',
         company
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Update company error:', error);
+      
+      // Handle MongoDB validation errors
+      if (error.name === 'ValidationError') {
+        return res.status(400).json({ error: error.message });
+      }
+      
+      // Handle cast errors (invalid ObjectId)
+      if (error.name === 'CastError') {
+        return res.status(400).json({ error: 'Invalid company ID format' });
+      }
+      
       res.status(500).json({ error: 'Server error' });
     }
   }
