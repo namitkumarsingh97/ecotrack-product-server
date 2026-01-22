@@ -126,7 +126,47 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const metrics = new SocialMetrics(req.body);
+      // Validate and normalize percentage fields (0-100)
+      const body = { ...req.body };
+      
+      // Ensure percentage fields are within valid range
+      if (body.femalePercentWorkforce !== undefined && body.femalePercentWorkforce !== null) {
+        const value = Number(body.femalePercentWorkforce);
+        if (value > 100) {
+          // If value > 100, it might be a count instead of percentage
+          // Calculate percentage if totalEmployees is available
+          if (body.totalEmployeesPermanent || body.totalEmployees || body.femaleEmployees) {
+            const total = Number(body.totalEmployeesPermanent || body.totalEmployees || 0);
+            if (total > 0) {
+              body.femalePercentWorkforce = Math.min(100, Math.round((value / total) * 100 * 100) / 100);
+            } else {
+              body.femalePercentWorkforce = Math.min(100, value);
+            }
+          } else {
+            // Cap at 100 if it's clearly a percentage error
+            body.femalePercentWorkforce = Math.min(100, value);
+          }
+        } else if (value < 0) {
+          body.femalePercentWorkforce = 0;
+        }
+      }
+      
+      if (body.womenInManagementPercent !== undefined && body.womenInManagementPercent !== null) {
+        const value = Number(body.womenInManagementPercent);
+        body.womenInManagementPercent = Math.max(0, Math.min(100, value));
+      }
+      
+      if (body.csrSpendPercent !== undefined && body.csrSpendPercent !== null) {
+        const value = Number(body.csrSpendPercent);
+        body.csrSpendPercent = Math.max(0, Math.min(100, value));
+      }
+      
+      if (body.employeeTurnoverPercent !== undefined && body.employeeTurnoverPercent !== null) {
+        const value = Number(body.employeeTurnoverPercent);
+        body.employeeTurnoverPercent = Math.max(0, Math.min(100, value));
+      }
+
+      const metrics = new SocialMetrics(body);
       await metrics.save();
 
       res.status(201).json({
@@ -371,7 +411,47 @@ router.put('/social/:id', authenticate, async (req: AuthRequest, res: Response) 
       return res.status(404).json({ error: 'Company not found or unauthorized' });
     }
 
-    Object.assign(metrics, req.body);
+    // Validate and normalize percentage fields (0-100)
+    const body = { ...req.body };
+    
+    // Ensure percentage fields are within valid range
+    if (body.femalePercentWorkforce !== undefined && body.femalePercentWorkforce !== null) {
+      const value = Number(body.femalePercentWorkforce);
+      if (value > 100) {
+        // If value > 100, it might be a count instead of percentage
+        // Calculate percentage if totalEmployees is available
+        if (body.totalEmployeesPermanent || body.totalEmployees || body.femaleEmployees) {
+          const total = Number(body.totalEmployeesPermanent || body.totalEmployees || 0);
+          if (total > 0) {
+            body.femalePercentWorkforce = Math.min(100, Math.round((value / total) * 100 * 100) / 100);
+          } else {
+            body.femalePercentWorkforce = Math.min(100, value);
+          }
+        } else {
+          // Cap at 100 if it's clearly a percentage error
+          body.femalePercentWorkforce = Math.min(100, value);
+        }
+      } else if (value < 0) {
+        body.femalePercentWorkforce = 0;
+      }
+    }
+    
+    if (body.womenInManagementPercent !== undefined && body.womenInManagementPercent !== null) {
+      const value = Number(body.womenInManagementPercent);
+      body.womenInManagementPercent = Math.max(0, Math.min(100, value));
+    }
+    
+    if (body.csrSpendPercent !== undefined && body.csrSpendPercent !== null) {
+      const value = Number(body.csrSpendPercent);
+      body.csrSpendPercent = Math.max(0, Math.min(100, value));
+    }
+    
+    if (body.employeeTurnoverPercent !== undefined && body.employeeTurnoverPercent !== null) {
+      const value = Number(body.employeeTurnoverPercent);
+      body.employeeTurnoverPercent = Math.max(0, Math.min(100, value));
+    }
+
+    Object.assign(metrics, body);
     await metrics.save();
 
     res.json({ message: 'Social metrics updated successfully', metrics });
