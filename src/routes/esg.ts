@@ -44,6 +44,27 @@ router.post(
         return res.status(404).json({ error: 'Company not found or unauthorized' });
       }
 
+      // Check if all required metrics exist before calculating
+      const [envMetrics, socialMetrics, govMetrics] = await Promise.all([
+        EnvironmentalMetrics.findOne({ companyId, period }).sort({ createdAt: -1 }),
+        SocialMetrics.findOne({ companyId, period }).sort({ createdAt: -1 }),
+        GovernanceMetrics.findOne({ companyId, period }).sort({ createdAt: -1 })
+      ]);
+
+      const missingMetrics: string[] = [];
+      if (!envMetrics) missingMetrics.push('Environmental');
+      if (!socialMetrics) missingMetrics.push('Social');
+      if (!govMetrics) missingMetrics.push('Governance');
+
+      if (missingMetrics.length > 0) {
+        return res.status(400).json({
+          error: `Cannot calculate ESG score: Missing ${missingMetrics.join(', ')} metrics for period ${period}`,
+          missingMetrics,
+          period,
+          suggestion: 'Please create all three metric types (Environmental, Social, and Governance) for the same period before calculating scores.'
+        });
+      }
+
       // Calculate scores
       const scores = await calculateESGScore(companyId, period);
 
@@ -92,7 +113,74 @@ router.get('/score/:companyId', authenticate, async (req: AuthRequest, res: Resp
       return res.status(404).json({ error: 'Company not found or unauthorized' });
     }
 
-    const scores = await ESGScore.find({ companyId }).sort({ period: -1 });
+    // Get stored scores
+    let scores = await ESGScore.find({ companyId }).sort({ period: -1 });
+
+    // If no stored scores, try to calculate from existing metrics
+    if (scores.length === 0) {
+      try {
+        // Get all periods that have metrics
+        const [envPeriods, socialPeriods, govPeriods] = await Promise.all([
+          EnvironmentalMetrics.distinct('period', { companyId }),
+          SocialMetrics.distinct('period', { companyId }),
+          GovernanceMetrics.distinct('period', { companyId })
+        ]);
+
+        // Find periods that have all three metric types
+        const allPeriods = [...new Set([...envPeriods, ...socialPeriods, ...govPeriods])];
+        const completePeriods = allPeriods.filter(period => 
+          envPeriods.includes(period) && 
+          socialPeriods.includes(period) && 
+          govPeriods.includes(period)
+        );
+
+        // Calculate scores for complete periods (sorted newest first)
+        const sortedPeriods = completePeriods.sort().reverse(); // Newest first
+        const calculatedScores = [];
+        for (const period of sortedPeriods.slice(0, 12)) { // Limit to 12 periods, newest first
+          try {
+            const scoreData = await calculateESGScore(companyId, period);
+            
+            // Validate scores are not NaN before saving
+            if (isNaN(scoreData.environmentalScore) || isNaN(scoreData.socialScore) || 
+                isNaN(scoreData.governanceScore) || isNaN(scoreData.overallScore)) {
+              console.warn(`Skipping period ${period} - calculated scores contain NaN values`);
+              continue;
+            }
+            
+            // Save the calculated score
+            let esgScore = await ESGScore.findOne({ companyId, period });
+            if (esgScore) {
+              esgScore.environmentalScore = scoreData.environmentalScore;
+              esgScore.socialScore = scoreData.socialScore;
+              esgScore.governanceScore = scoreData.governanceScore;
+              esgScore.overallScore = scoreData.overallScore;
+              esgScore.calculatedAt = new Date();
+              await esgScore.save();
+            } else {
+              esgScore = new ESGScore({
+                companyId,
+                period,
+                ...scoreData
+              });
+              await esgScore.save();
+            }
+            calculatedScores.push(esgScore);
+          } catch (error: any) {
+            // Skip periods with incomplete data or calculation errors
+            console.warn(`Skipping period ${period} due to: ${error.message || 'incomplete metrics'}`);
+          }
+        }
+
+        // Return calculated scores
+        scores = calculatedScores.sort((a, b) => 
+          b.period.localeCompare(a.period)
+        );
+      } catch (error) {
+        console.error('Error auto-calculating scores:', error);
+        // Return empty array if calculation fails
+      }
+    }
 
     res.json({ scores });
   } catch (error) {
