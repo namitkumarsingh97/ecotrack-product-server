@@ -106,6 +106,117 @@ const getDueDateText = (dueDate: Date): string => {
   return dueDate.toLocaleDateString();
 };
 
+// Helper function to validate if task can be marked as completed
+const validateTaskCompletion = async (task: any, companyId: string, period?: string): Promise<{ canComplete: boolean; reason?: string }> => {
+  // For manual tasks, allow completion without validation
+  if (task.source === 'manual' || task.source === 'recommendation') {
+    return { canComplete: true };
+  }
+
+  // Get the period to check (use latest if not specified)
+  let checkPeriod = period;
+  if (!checkPeriod) {
+    // Get latest period from metrics
+    const EnvironmentalMetrics = require('../models/EnvironmentalMetrics').default;
+    const latestEnv = await EnvironmentalMetrics.findOne({ companyId }).sort({ period: -1 });
+    checkPeriod = latestEnv?.period;
+  }
+
+  // Validate based on task type
+  switch (task.relatedTo) {
+    case 'Data': {
+      // Check if the missing data is now present
+      const EnvironmentalMetrics = require('../models/EnvironmentalMetrics').default;
+      const SocialMetrics = require('../models/SocialMetrics').default;
+      const GovernanceMetrics = require('../models/GovernanceMetrics').default;
+
+      if (task.sourceId === 'env-electricity') {
+        const envMetrics = await EnvironmentalMetrics.findOne({ companyId, period: checkPeriod });
+        if (!envMetrics?.electricityUsageKwh && !envMetrics?.electricityKwh) {
+          return { 
+            canComplete: false, 
+            reason: 'Electricity consumption data is still missing. Please add the data first.' 
+          };
+        }
+      } else if (task.sourceId === 'env-water') {
+        const envMetrics = await EnvironmentalMetrics.findOne({ companyId, period: checkPeriod });
+        if (!envMetrics?.waterUsageKL) {
+          return { 
+            canComplete: false, 
+            reason: 'Water consumption data is still missing. Please add the data first.' 
+          };
+        }
+      } else if (task.sourceId === 'social-employees') {
+        const socialMetrics = await SocialMetrics.findOne({ companyId, period: checkPeriod });
+        if (!socialMetrics?.totalEmployeesPermanent && !socialMetrics?.totalEmployees) {
+          return { 
+            canComplete: false, 
+            reason: 'Employee count data is still missing. Please add the data first.' 
+          };
+        }
+      } else if (task.sourceId === 'gov-board') {
+        const govMetrics = await GovernanceMetrics.findOne({ companyId, period: checkPeriod });
+        if (!govMetrics?.boardMembers) {
+          return { 
+            canComplete: false, 
+            reason: 'Board composition details are still missing. Please add the data first.' 
+          };
+        }
+      }
+      return { canComplete: true };
+    }
+
+    case 'Evidence': {
+      // Check if evidence is renewed/updated
+      const Evidence = require('../models/Evidence').default;
+      if (task.sourceId) {
+        const evidence = await Evidence.findById(task.sourceId);
+        if (!evidence) {
+          return { 
+            canComplete: false, 
+            reason: 'Evidence document not found. Please upload the evidence first.' 
+          };
+        }
+        // Check if expiry date is updated (more than 30 days from now)
+        if (evidence.expiryDate) {
+          const now = new Date();
+          const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+          if (evidence.expiryDate <= thirtyDaysFromNow) {
+            return { 
+              canComplete: false, 
+              reason: 'Evidence document is still expiring soon. Please renew it with a new expiry date.' 
+            };
+          }
+        }
+      }
+      return { canComplete: true };
+    }
+
+    case 'Compliance': {
+      // For compliance tasks, we can allow manual completion
+      // but ideally should check compliance status
+      // For now, allow completion but warn user
+      return { canComplete: true };
+    }
+
+    case 'Score': {
+      // Check if ESG scores are calculated
+      const ESGScore = require('../models/ESGScore').default;
+      const score = await ESGScore.findOne({ companyId, period: checkPeriod });
+      if (!score) {
+        return { 
+          canComplete: false, 
+          reason: 'ESG scores are not calculated yet. Please calculate scores first.' 
+        };
+      }
+      return { canComplete: true };
+    }
+
+    default:
+      return { canComplete: true };
+  }
+};
+
 // Update Task Status
 router.put(
   '/:id/status',
@@ -130,6 +241,25 @@ router.put(
 
       if (!task) {
         return res.status(404).json({ error: 'Task not found or unauthorized' });
+      }
+
+      // If marking as completed, validate first
+      if (status === 'Completed') {
+        const { period } = req.query;
+        console.log(`[Task Validation] Validating task ${id} for completion...`);
+        const validation = await validateTaskCompletion(
+          task, 
+          task.companyId.toString(), 
+          period as string | undefined
+        );
+        console.log(`[Task Validation] Result:`, validation);
+        if (!validation.canComplete) {
+          console.log(`[Task Validation] FAILED: ${validation.reason}`);
+          return res.status(400).json({ 
+            error: validation.reason || 'Task cannot be marked as completed. Please complete the required actions first.' 
+          });
+        }
+        console.log(`[Task Validation] PASSED: Task can be completed`);
       }
 
       task.status = status;

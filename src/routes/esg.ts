@@ -400,20 +400,43 @@ router.get('/report/:companyId', authenticate, async (req: AuthRequest, res: Res
       return res.status(404).json({ error: 'Company not found or unauthorized' });
     }
 
+    // Validate period if provided
+    if (period && typeof period !== 'string') {
+      return res.status(400).json({ error: 'Invalid period parameter' });
+    }
+
     if (format === 'pdf') {
-      const buffer = await generatePDFReport(companyId, period as string);
-      res.contentType('application/pdf');
-      res.send(buffer);
+      try {
+        const buffer = await generatePDFReport(companyId, period as string);
+        res.contentType('application/pdf');
+        res.send(buffer);
+      } catch (error: any) {
+        console.error('PDF generation error:', error);
+        return res.status(500).json({ 
+          error: error.message || 'Failed to generate PDF report',
+          details: 'Please ensure ESG scores are calculated for the specified period'
+        });
+      }
     } else if (format === 'excel') {
-      const buffer = await generateExcelReport(companyId, period as string);
-      res.contentType('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.send(buffer);
+      try {
+        const buffer = await generateExcelReport(companyId, period as string);
+        res.contentType('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.send(buffer);
+      } catch (error: any) {
+        console.error('Excel generation error:', error);
+        return res.status(500).json({ 
+          error: error.message || 'Failed to generate Excel report',
+          details: 'Please ensure ESG scores are calculated for the specified period'
+        });
+      }
     } else {
       // Return JSON report
-      const esgScore = await ESGScore.findOne({ 
-        companyId, 
-        period: period || { $exists: true } 
-      }).sort({ period: -1 });
+      let esgScore;
+      if (period) {
+        esgScore = await ESGScore.findOne({ companyId, period }).sort({ createdAt: -1 });
+      } else {
+        esgScore = await ESGScore.findOne({ companyId }).sort({ period: -1 });
+      }
 
       res.json({
         company,
