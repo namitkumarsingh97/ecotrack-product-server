@@ -63,10 +63,10 @@ const seedData = async () => {
 
     const users = await User.insertMany(testUsers);
     console.log(`✅ Created ${users.length} test users`);
-    console.log('   👑 admin@ecotrack.in / admin1234 (ADMIN - Enterprise Plan)');
-    console.log('   📧 demo@ecotrack.in / demo1234 (Pro Plan)');
-    console.log('   📧 rajesh@greenmanufacturing.com / test1234');
-    console.log('   👑 priya@sustainableindia.com / test1234 (ADMIN)\n');
+    console.log('👑 admin@ecotrack.in / admin1234 (ADMIN - Enterprise Plan)');
+    console.log('📧 demo@ecotrack.in / demo1234 (Pro Plan)');
+    console.log('📧 rajesh@greenmanufacturing.com / test1234');
+    console.log('👑 priya@sustainableindia.com / test1234 (ADMIN)\n');
 
     // Create test companies
     console.log('🏢 Creating test companies...');
@@ -111,6 +111,23 @@ const seedData = async () => {
 
     const companies = await Company.insertMany(testCompanies);
     console.log(`✅ Created ${companies.length} test companies\n`);
+
+    // Link users to their companies via companyId
+    console.log('🔗 Linking users to companies...');
+    // Admin user (users[0]) - no company (system admin)
+    // Demo user (users[1]) -> Sustainable Textiles Ltd (companies[2])
+    await User.findByIdAndUpdate(users[1]._id, { companyId: companies[2]._id });
+    console.log(`   ✅ Linked ${users[1].email} to ${companies[2].name}`);
+    
+    // Rajesh (users[2]) -> Pure Pharma Industries (companies[3])
+    await User.findByIdAndUpdate(users[2]._id, { companyId: companies[3]._id });
+    console.log(`   ✅ Linked ${users[2].email} to ${companies[3].name}`);
+    
+    // Priya (users[3]) - admin, but can have a company for testing
+    // Link to first company for testing purposes
+    await User.findByIdAndUpdate(users[3]._id, { companyId: companies[0]._id });
+    console.log(`   ✅ Linked ${users[3].email} to ${companies[0].name} (Admin with company for testing)`);
+    console.log(`   ℹ️  Admin user (${users[0].email}) remains system-level (no companyId)\n`);
 
     // Create comprehensive ESG data for each company
     for (const company of companies) {

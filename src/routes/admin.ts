@@ -235,13 +235,32 @@ router.post(
       user.password = hashedPassword;
       await user.save();
 
-      // Send password reset email if requested
-      if (sendEmail) {
-        try {
-          await emailService.sendPasswordResetByAdmin(user.email, user.name, tempPassword);
-        } catch (emailError) {
-          console.error('Failed to send password reset email:', emailError);
+      // Always send password reset email with company information if available
+      try {
+        // Populate company information if user has a company
+        let companyInfo = null;
+        if (user.companyId) {
+          const company = await Company.findById(user.companyId).select('name industry location plan');
+          if (company) {
+            companyInfo = {
+              name: company.name,
+              industry: company.industry,
+              location: company.location,
+              plan: company.plan
+            };
+          }
         }
+        
+        await emailService.sendPasswordResetByAdmin(
+          user.email, 
+          user.name, 
+          tempPassword,
+          companyInfo
+        );
+        console.log(`✅ Password reset email sent to ${user.email}`);
+      } catch (emailError) {
+        console.error('❌ Failed to send password reset email:', emailError);
+        // Don't fail the request if email fails, but log it
       }
 
       res.json({
@@ -386,14 +405,24 @@ router.post(
       user.companyId = company._id;
       await user.save();
 
-      // Send invitation email if requested
-      if (sendInvitation) {
-        try {
-          await emailService.sendUserInvitation(email, name, tempPassword, companyName);
-        } catch (emailError) {
-          console.error('Failed to send invitation email:', emailError);
-          // Don't fail the request if email fails
-        }
+      // Always send client onboarding email with complete details
+      try {
+        await emailService.sendClientOnboardingEmail(
+          email,
+          name,
+          tempPassword,
+          companyName,
+          industry,
+          location,
+          plan,
+          company.subscriptionStatus,
+          company.trialEndDate
+        );
+        console.log(`✅ Client onboarding email sent to ${email}`);
+      } catch (emailError) {
+        console.error('❌ Failed to send client onboarding email:', emailError);
+        // Don't fail the request if email fails, but log it
+        // In production, you might want to queue this for retry
       }
 
       res.status(201).json({
