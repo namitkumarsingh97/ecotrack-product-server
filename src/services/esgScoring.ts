@@ -11,11 +11,12 @@ interface ESGScores {
 }
 
 /**
- * Calculate Environmental Score (0-100)
- * Factors: Energy efficiency, waste management, renewable energy adoption
+ * Calculate Environmental Score (0-100) based on actual performance
+ * Factors: Renewable energy %, waste recycled %, energy/water/waste efficiency, emissions
  */
 const calculateEnvironmentalScore = (metrics: any, company: any): number => {
-  let score = 100;
+  let score = 0;
+  let factors = 0;
 
   // Validate company has employeeCount
   const employeeCount = Number(company?.employeeCount || 0);
@@ -24,148 +25,263 @@ const calculateEnvironmentalScore = (metrics: any, company: any): number => {
     company.employeeCount = 100;
   }
 
-  // Per-employee metrics (better efficiency)
-  const electricityUsage = Number(metrics.electricityUsageKwh || 0);
-  const wasteGenerated = Number(metrics.wasteGeneratedKg || 0);
+  // Get metrics - support both old and new field names
+  const electricityUsage = Number(metrics.electricityUsageKwh || metrics.electricityKwh || 0);
+  const wasteGenerated = Number(metrics.wasteGeneratedKg || metrics.totalWasteTonnes * 1000 || 0);
   const waterUsage = Number(metrics.waterUsageKL || 0);
   const carbonEmissions = Number(metrics.carbonEmissionsTons || 0);
   const renewableEnergyPercent = Number(metrics.renewableEnergyPercent || 0);
+  const wasteRecycledPercent = Number(metrics.wasteRecycledPercent || 0);
 
-  if (!isNaN(electricityUsage) && electricityUsage > 0 && company.employeeCount > 0) {
-    const energyPerEmployee = electricityUsage / company.employeeCount;
-    // Energy efficiency (0-30 points)
-    // Penalize high energy usage (>500 kWh per employee/month is poor)
-    if (energyPerEmployee > 500) score -= 15;
-    else if (energyPerEmployee > 300) score -= 8;
-    else if (energyPerEmployee < 150) score += 5; // Bonus for efficiency
-  }
-
-  if (!isNaN(wasteGenerated) && wasteGenerated > 0 && company.employeeCount > 0) {
-    const wastePerEmployee = wasteGenerated / company.employeeCount;
-    // Waste management (0-25 points)
-    // Less than 50kg per employee is good
-    if (wastePerEmployee > 100) score -= 15;
-    else if (wastePerEmployee > 50) score -= 8;
-    else score += 5;
-  }
-
-  if (!isNaN(waterUsage) && waterUsage > 0 && company.employeeCount > 0) {
-    const waterPerEmployee = waterUsage / company.employeeCount;
-    // Water conservation (0-15 points)
-    if (waterPerEmployee > 5) score -= 10;
-    else if (waterPerEmployee < 2) score += 5;
-  }
-
-  // Renewable energy adoption (0-30 points) - Major factor
+  // Renewable Energy % (Higher is better, 0-100%) - Direct score
   if (!isNaN(renewableEnergyPercent) && renewableEnergyPercent >= 0 && renewableEnergyPercent <= 100) {
-    score += (renewableEnergyPercent * 0.3);
+    score += renewableEnergyPercent; // 50% renewable = 50 points
+    factors++;
   }
 
-  // Carbon emissions (penalty)
-  if (!isNaN(carbonEmissions) && carbonEmissions > 0 && company.employeeCount > 0) {
-    const carbonPerEmployee = carbonEmissions / company.employeeCount;
-    if (carbonPerEmployee > 5) score -= 10;
-    else if (carbonPerEmployee < 2) score += 5;
+  // Waste Recycled % (Higher is better, 0-100%) - Direct score
+  if (!isNaN(wasteRecycledPercent) && wasteRecycledPercent >= 0 && wasteRecycledPercent <= 100) {
+    score += wasteRecycledPercent; // 80% recycled = 80 points
+    factors++;
   }
 
-  return Math.max(0, Math.min(100, score));
+  // Energy Consumption (Lower is better - normalized against benchmark)
+  if (!isNaN(electricityUsage) && electricityUsage > 0 && employeeCount > 0) {
+    // Benchmark: 500 kWh per employee per year for medium business
+    const benchmark = 500 * employeeCount;
+    const efficiency = Math.max(0, 100 - (electricityUsage / benchmark) * 50); // Max 50 points
+    score += efficiency;
+    factors++;
+  }
+
+  // Water Consumption (Lower is better)
+  if (!isNaN(waterUsage) && waterUsage > 0 && employeeCount > 0) {
+    // Benchmark: 100 KL per employee per year
+    const benchmark = 100 * employeeCount;
+    const efficiency = Math.max(0, 100 - (waterUsage / benchmark) * 50); // Max 50 points
+    score += efficiency;
+    factors++;
+  }
+
+  // Waste Generated (Lower is better)
+  if (!isNaN(wasteGenerated) && wasteGenerated > 0 && employeeCount > 0) {
+    // Benchmark: 50 kg per employee per year
+    const benchmark = 50 * employeeCount;
+    const efficiency = Math.max(0, 100 - (wasteGenerated / benchmark) * 50); // Max 50 points
+    score += efficiency;
+    factors++;
+  }
+
+  // Carbon Emissions (Lower is better)
+  if (!isNaN(carbonEmissions) && carbonEmissions >= 0 && employeeCount > 0) {
+    // Benchmark: 2 tons per employee per year
+    const benchmark = 2 * employeeCount;
+    const efficiency = Math.max(0, 100 - (carbonEmissions / benchmark) * 50); // Max 50 points
+    score += efficiency;
+    factors++;
+  }
+
+  // Average the score
+  return factors > 0 ? Math.max(0, Math.min(100, score / factors)) : 0;
 };
 
 /**
- * Calculate Social Score (0-100)
- * Factors: Gender diversity, training, safety, retention
+ * Calculate Social Score (0-100) based on actual performance
+ * Factors: Gender diversity, training, safety, retention, community investment
  */
 const calculateSocialScore = (metrics: any): number => {
-  let score = 50; // Base score
+  let score = 0;
+  let factors = 0;
 
-  // Gender diversity (0-25 points)
-  // Support both new field (femalePercentWorkforce) and legacy field (femaleEmployees/totalEmployees)
+  // Gender diversity (30-50% is ideal)
   let femalePercentage = 0;
   if (metrics.femalePercentWorkforce !== undefined && metrics.femalePercentWorkforce !== null) {
     femalePercentage = Number(metrics.femalePercentWorkforce);
   } else if (metrics.femaleEmployees && metrics.totalEmployees) {
     femalePercentage = (Number(metrics.femaleEmployees) / Number(metrics.totalEmployees)) * 100;
   } else if (metrics.totalEmployeesPermanent) {
-    // Try to use permanent employees if available
     const totalEmployees = Number(metrics.totalEmployeesPermanent) + Number(metrics.totalEmployeesContractual || 0);
     if (metrics.femaleEmployees && totalEmployees > 0) {
       femalePercentage = (Number(metrics.femaleEmployees) / totalEmployees) * 100;
     }
   }
 
-  if (!isNaN(femalePercentage) && femalePercentage > 0) {
-    if (femalePercentage >= 40) score += 25;
-    else if (femalePercentage >= 30) score += 18;
-    else if (femalePercentage >= 20) score += 12;
-    else if (femalePercentage >= 10) score += 6;
+  if (!isNaN(femalePercentage) && femalePercentage >= 0 && femalePercentage <= 100) {
+    let diversityScore = 0;
+    if (femalePercentage >= 30 && femalePercentage <= 50) {
+      diversityScore = 100; // Ideal range
+    } else if (femalePercentage >= 20 && femalePercentage < 30) {
+      diversityScore = 70 + ((femalePercentage - 20) / 10) * 30; // 20-30%: 70-100
+    } else if (femalePercentage > 50 && femalePercentage <= 60) {
+      diversityScore = 100 - ((femalePercentage - 50) / 10) * 20; // 50-60%: 100-80
+    } else if (femalePercentage >= 10 && femalePercentage < 20) {
+      diversityScore = 40 + ((femalePercentage - 10) / 10) * 30; // 10-20%: 40-70
+    } else {
+      diversityScore = (femalePercentage / 10) * 40; // <10%: 0-40
+    }
+    score += diversityScore;
+    factors++;
   }
 
-  // Training & development (0-25 points)
-  // Support both new field (totalTrainingHoursPerEmployee) and legacy field (avgTrainingHours)
+  // Training & development (Higher is better, 20+ hours is good)
   const trainingHours = Number(metrics.totalTrainingHoursPerEmployee || metrics.avgTrainingHours || 0);
-  if (!isNaN(trainingHours) && trainingHours > 0) {
-    if (trainingHours >= 40) score += 25;
-    else if (trainingHours >= 24) score += 18;
-    else if (trainingHours >= 12) score += 12;
-    else if (trainingHours >= 6) score += 6;
+  if (!isNaN(trainingHours) && trainingHours >= 0) {
+    let trainingScore = 0;
+    if (trainingHours >= 40) {
+      trainingScore = 100; // Excellent
+    } else if (trainingHours >= 20) {
+      trainingScore = 70 + ((trainingHours - 20) / 20) * 30; // 20-40: 70-100
+    } else if (trainingHours >= 10) {
+      trainingScore = 40 + ((trainingHours - 10) / 10) * 30; // 10-20: 40-70
+    } else {
+      trainingScore = (trainingHours / 10) * 40; // 0-10: 0-40
+    }
+    score += trainingScore;
+    factors++;
   }
 
-  // Workplace safety (0-25 points)
-  // Support both new fields (accidentIncidents) and legacy field (workplaceIncidents)
+  // Workplace safety (Lower is better, 0 is perfect)
   const incidents = Number(metrics.accidentIncidents || metrics.workplaceIncidents || 0);
   const totalEmployees = Number(metrics.totalEmployeesPermanent || metrics.totalEmployees || 0);
   if (!isNaN(incidents) && !isNaN(totalEmployees) && totalEmployees > 0) {
-    const incidentRate = (incidents / totalEmployees) * 100;
-    if (incidentRate === 0) score += 25;
-    else if (incidentRate < 1) score += 18;
-    else if (incidentRate < 3) score += 10;
-    else score -= 10;
+    let safetyScore = 0;
+    if (incidents === 0) {
+      safetyScore = 100; // Perfect
+    } else if (incidents <= 2) {
+      safetyScore = 100 - (incidents * 15); // 1-2: 85-70
+    } else if (incidents <= 5) {
+      safetyScore = 70 - ((incidents - 2) * 10); // 3-5: 60-40
+    } else {
+      safetyScore = Math.max(0, 40 - ((incidents - 5) * 8)); // >5: decreasing
+    }
+    score += safetyScore;
+    factors++;
   }
 
-  // Employee retention (0-25 points)
+  // Employee retention (Lower turnover is better, 0-10% is excellent)
   const turnoverPercent = Number(metrics.employeeTurnoverPercent || 0);
-  if (!isNaN(turnoverPercent) && turnoverPercent >= 0) {
-    if (turnoverPercent < 5) score += 25;
-    else if (turnoverPercent < 10) score += 18;
-    else if (turnoverPercent < 15) score += 12;
-    else if (turnoverPercent < 25) score += 6;
-    else score -= 5;
+  if (!isNaN(turnoverPercent) && turnoverPercent >= 0 && turnoverPercent <= 100) {
+    let retentionScore = 0;
+    if (turnoverPercent <= 5) {
+      retentionScore = 100; // Excellent
+    } else if (turnoverPercent <= 10) {
+      retentionScore = 100 - ((turnoverPercent - 5) / 5) * 20; // 5-10%: 100-80
+    } else if (turnoverPercent <= 15) {
+      retentionScore = 80 - ((turnoverPercent - 10) / 5) * 30; // 10-15%: 80-50
+    } else if (turnoverPercent <= 20) {
+      retentionScore = 50 - ((turnoverPercent - 15) / 5) * 30; // 15-20%: 50-20
+    } else {
+      retentionScore = Math.max(0, 20 - ((turnoverPercent - 20) / 10) * 20); // >20%: 20-0
+    }
+    score += retentionScore;
+    factors++;
   }
 
-  return Math.max(0, Math.min(100, score));
+  // Community investment (Higher is better, relative to company size)
+  const communityInvestment = Number(metrics.communityInvestment || 0);
+  if (!isNaN(communityInvestment) && communityInvestment >= 0) {
+    // Benchmark: ₹500,000/year for medium business
+    const benchmark = 500000;
+    const investmentScore = Math.min(100, (communityInvestment / benchmark) * 100);
+    score += investmentScore;
+    factors++;
+  }
+
+  // Average the score
+  return factors > 0 ? Math.max(0, Math.min(100, score / factors)) : 0;
 };
 
 /**
- * Calculate Governance Score (0-100)
- * Factors: Board composition, policies, compliance
+ * Calculate Governance Score (0-100) based on actual performance
+ * Factors: Board composition, policies, compliance, meetings
  */
 const calculateGovernanceScore = (metrics: any): number => {
-  let score = 50; // Base score
+  let score = 0;
+  let factors = 0;
 
-  // Board independence (0-30 points)
+  // Board independence (30-50% is ideal)
   const independentDirectors = Number(metrics.independentDirectors || 0);
   const boardMembers = Number(metrics.boardMembers || 0);
   if (!isNaN(independentDirectors) && !isNaN(boardMembers) && boardMembers > 0) {
-    const independenceRatio = independentDirectors / boardMembers;
-    if (independenceRatio >= 0.5) score += 30;
-    else if (independenceRatio >= 0.33) score += 20;
-    else if (independenceRatio >= 0.25) score += 10;
+    const independenceRatio = (independentDirectors / boardMembers) * 100;
+    let independenceScore = 0;
+    if (independenceRatio >= 30 && independenceRatio <= 50) {
+      independenceScore = 100; // Ideal
+    } else if (independenceRatio >= 20 && independenceRatio < 30) {
+      independenceScore = 70 + ((independenceRatio - 20) / 10) * 30; // 20-30%: 70-100
+    } else if (independenceRatio > 50 && independenceRatio <= 60) {
+      independenceScore = 100 - ((independenceRatio - 50) / 10) * 20; // 50-60%: 100-80
+    } else if (independenceRatio >= 10 && independenceRatio < 20) {
+      independenceScore = 40 + ((independenceRatio - 10) / 10) * 30; // 10-20%: 40-70
+    } else {
+      independenceScore = (independenceRatio / 10) * 40; // <10%: 0-40
+    }
+    score += independenceScore;
+    factors++;
   }
 
-  // Policy framework (0-40 points)
-  if (metrics.antiCorruptionPolicy === true) score += 20;
-  if (metrics.dataPrivacyPolicy === true) score += 20;
+  // Board meetings (4-12 per year is good)
+  const boardMeetings = Number(metrics.boardMeetings || 0);
+  if (!isNaN(boardMeetings) && boardMeetings > 0) {
+    let meetingsScore = 0;
+    if (boardMeetings >= 4 && boardMeetings <= 12) {
+      meetingsScore = 100; // Ideal range
+    } else if (boardMeetings < 4) {
+      meetingsScore = (boardMeetings / 4) * 100; // Less than 4: proportional
+    } else {
+      meetingsScore = Math.max(70, 100 - ((boardMeetings - 12) / 4) * 10); // >12: slight decrease
+    }
+    score += meetingsScore;
+    factors++;
+  }
 
-  // Compliance record (0-30 points)
+  // Audit committee meetings (4+ per year is good)
+  const auditMeetings = Number(metrics.auditCommitteeMeetings || 0);
+  if (!isNaN(auditMeetings) && auditMeetings > 0) {
+    let auditScore = 0;
+    if (auditMeetings >= 4) {
+      auditScore = 100; // Good
+    } else {
+      auditScore = (auditMeetings / 4) * 100; // Less than 4: proportional
+    }
+    score += auditScore;
+    factors++;
+  }
+
+  // Policy framework (Yes = 100, No = 0)
+  const policyFields = [
+    { value: metrics.antiCorruptionPolicy, name: 'Anti-Corruption Policy' },
+    { value: metrics.dataPrivacyPolicy, name: 'Data Privacy Policy' },
+    { value: metrics.codeOfConductExists, name: 'Code of Conduct' },
+    { value: metrics.whistleblowerPolicyExists, name: 'Whistleblower Policy' },
+  ];
+
+  policyFields.forEach((field) => {
+    if (field.value !== undefined && field.value !== null) {
+      score += field.value === true ? 100 : 0;
+      factors++;
+    }
+  });
+
+  // Compliance record (0 violations = 100, more violations = lower score)
   const complianceViolations = Number(metrics.complianceViolations || 0);
-  if (!isNaN(complianceViolations)) {
-    if (complianceViolations === 0) score += 30;
-    else if (complianceViolations === 1) score += 15;
-    else if (complianceViolations === 2) score += 5;
-    else score -= 20; // Major penalty for violations
+  if (!isNaN(complianceViolations) && complianceViolations >= 0) {
+    let complianceScore = 0;
+    if (complianceViolations === 0) {
+      complianceScore = 100; // Perfect
+    } else if (complianceViolations === 1) {
+      complianceScore = 70; // Good
+    } else if (complianceViolations === 2) {
+      complianceScore = 40; // Moderate
+    } else {
+      complianceScore = Math.max(0, 40 - ((complianceViolations - 2) * 20)); // >2: decreasing
+    }
+    score += complianceScore;
+    factors++;
   }
 
-  return Math.max(0, Math.min(100, score));
+  // Average the score
+  return factors > 0 ? Math.max(0, Math.min(100, score / factors)) : 0;
 };
 
 /**
@@ -229,4 +345,3 @@ export const calculateESGScore = async (companyId: string, period: string): Prom
     overallScore: Math.round(overallScore * 10) / 10
   };
 };
-
